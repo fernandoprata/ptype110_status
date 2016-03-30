@@ -13,6 +13,7 @@
 
     vim: expandtab sw=4 ts=4 sts=4:
 **********************************************************************/
+require_once INCLUDE_DIR . 'class.orm.php';
 
 class Config {
     var $config = array();
@@ -29,26 +30,25 @@ class Config {
     # new settings and the corresponding default values.
     var $defaults = array();                # List of default values
 
-    function Config($section=null) {
+    function __construct($section=null, $defaults=array()) {
         if ($section)
             $this->section = $section;
 
         if ($this->section === null)
             return false;
 
+        if ($defaults)
+            $this->defaults = $defaults;
+
         if (isset($_SESSION['cfg:'.$this->section]))
             $this->session = &$_SESSION['cfg:'.$this->section];
+
         $this->load();
     }
 
     function load() {
-
-        $sql='SELECT id, `key`, value, `updated` FROM '.$this->table
-            .' WHERE `'.$this->section_column.'` = '.db_input($this->section);
-
-        if(($res=db_query($sql)) && db_num_rows($res))
-            while ($row = db_fetch_array($res))
-                $this->config[$row['key']] = $row;
+        foreach ($this->items() as $I)
+            $this->config[$I->key] = $I;
     }
 
     function getNamespace() {
@@ -57,8 +57,8 @@ class Config {
 
     function getInfo() {
         $info = $this->defaults;
-        foreach ($this->config as $key=>$setting)
-            $info[$key] = $setting['value'];
+        foreach ($this->config as $key=>$item)
+            $info[$key] = $item->value;
         return $info;
     }
 
@@ -66,7 +66,7 @@ class Config {
         if (isset($this->session) && isset($this->session[$key]))
             return $this->session[$key];
         elseif (isset($this->config[$key]))
-            return $this->config[$key]['value'];
+            return $this->config[$key]->value;
         elseif (isset($this->defaults[$key]))
             return $this->defaults[$key];
 
@@ -92,20 +92,20 @@ class Config {
 
     function lastModified($key) {
         if (isset($this->config[$key]))
-            return $this->config[$key]['updated'];
-        else
-            return false;
+            return $this->config[$key]->updated;
+
+        return false;
     }
 
     function create($key, $value) {
-        $sql = 'INSERT INTO '.$this->table
-            .' SET `'.$this->section_column.'`='.db_input($this->section)
-            .', `key`='.db_input($key)
-            .', value='.db_input($value);
-        if (!db_query($sql) || !($id=db_insert_id()))
+        $item = new ConfigItem([
+            $this->section_column => $this->section,
+            'key' => $key,
+            'value' => $value,
+        ]);
+        if (!$item->save())
             return false;
 
-        $this->config[$key] = array('key'=>$key, 'value'=>$value, 'id'=>$id);
         return true;
     }
 
@@ -115,16 +115,9 @@ class Config {
         elseif (!isset($this->config[$key]))
             return $this->create($key, $value);
 
-        $setting = &$this->config[$key];
-        if ($setting['value'] == $value)
-            return true;
-
-        if (!db_query('UPDATE '.$this->table.' SET updated=NOW(), value='
-                .db_input($value).' WHERE id='.db_input($setting['id'])))
-            return false;
-
-        $setting['value'] = $value;
-        return true;
+        $item = $this->config[$key];
+        $item->value = $value;
+        return $item->save();
     }
 
     function updateAll($updates) {
@@ -135,12 +128,47 @@ class Config {
     }
 
     function destroy() {
-
-        $sql='DELETE FROM '.$this->table
-            .' WHERE `'.$this->section_column.'` = '.db_input($this->section);
-
-        db_query($sql);
         unset($this->session);
+        return $this->items()->delete();
+    }
+
+    function items() {
+        static $items;
+
+        if (!isset($items))
+            $items = ConfigItem::items($this->section, $this->section_column);
+
+        return $items;
+    }
+}
+
+class ConfigItem
+extends VerySimpleModel {
+    static $meta = array(
+        'table' => CONFIG_TABLE,
+        'pk' => array('id'),
+    );
+
+    static function items($namespace, $column='namespace') {
+
+        $items = static::objects()
+            ->filter([$column => $namespace]);
+
+        try {
+            count($items);
+        }
+        catch (InconsistentModelException $ex) {
+            // Pending upgrade ??
+            $items = array();
+        }
+
+        return $items;
+    }
+
+    function save($refetch=false) {
+        if ($this->dirty)
+            $this->updated = SqlFunction::NOW();
+        return parent::save($this->dirty || $refetch);
     }
 }
 
@@ -158,6 +186,7 @@ class OsticketConfig extends Config {
         'allow_pw_reset' =>     true,
         'pw_reset_window' =>    30,
         'enable_richtext' =>    true,
+        'enable_avatars' =>     true,
         'allow_attachments' =>  true,
         'agent_name_format' =>  'full', # First Last
         'client_name_format' => 'original', # As entered
@@ -172,20 +201,24 @@ class OsticketConfig extends Config {
         'default_help_topic' => 0,
         'help_topic_sort_mode' => 'a',
         'client_verify_email' => 1,
+        'allow_auth_tokens' => 1,
         'verify_email_addrs' => 1,
         'client_avatar' => 'gravatar.mm',
         'agent_avatar' => 'gravatar.mm',
+        'ticket_lock' => 2, // Lock on activity
+        'max_open_tickets' => 0,
     );
 
-    function OsticketConfig($section=null) {
-        parent::Config($section);
+    function __construct($section=null) {
+        parent::__construct($section);
 
         if (count($this->config) == 0) {
             // Fallback for osticket < 1.7@852ca89e
             $sql='SELECT * FROM '.$this->table.' WHERE id = 1';
+            $meta = ConfigItem::getMeta();
             if (($res=db_query($sql)) && db_num_rows($res))
                 foreach (db_fetch_array($res) as $key=>$value)
-                    $this->config[$key] = array('value'=>$value);
+                    $this->config[$key] = $meta->newInstance(array('value'=>$value));
         }
 
         return true;
@@ -375,6 +408,10 @@ class OsticketConfig extends Config {
         return $this->get('enable_richtext');
     }
 
+    function isAvatarsEnabled() {
+        return $this->get('enable_avatars');
+    }
+
     function getClientTimeout() {
         return $this->getClientSessionTimeout();
     }
@@ -421,6 +458,10 @@ class OsticketConfig extends Config {
 
     function getLockTime() {
         return $this->get('autolock_minutes');
+    }
+
+    function getTicketLockMode() {
+        return $this->get('ticket_lock');
     }
 
     function getAgentNameFormat() {
@@ -651,6 +692,10 @@ class OsticketConfig extends Config {
 
     function isClientEmailVerificationRequired() {
         return $this->get('client_verify_email');
+    }
+
+    function isAuthTokenEnabled() {
+        return $this->get('allow_auth_tokens');
     }
 
     function isCaptchaEnabled() {
@@ -1103,6 +1148,7 @@ class OsticketConfig extends Config {
             'secondary_langs'=>$secondary_langs,
             'max_file_size' => $vars['max_file_size'],
             'autolock_minutes' => $vars['autolock_minutes'],
+            'enable_avatars' => isset($vars['enable_avatars']) ? 1 : 0,
             'enable_richtext' => isset($vars['enable_richtext']) ? 1 : 0,
         ));
     }
@@ -1130,6 +1176,7 @@ class OsticketConfig extends Config {
             'allow_pw_reset'=>isset($vars['allow_pw_reset'])?1:0,
             'pw_reset_window'=>$vars['pw_reset_window'],
             'agent_name_format'=>$vars['agent_name_format'],
+            'hide_staff_name'=>isset($vars['hide_staff_name']) ? 1 : 0,
             'agent_avatar'=>$vars['agent_avatar'],
         ));
     }
@@ -1153,6 +1200,7 @@ class OsticketConfig extends Config {
             'clients_only'=>isset($vars['clients_only'])?1:0,
             'client_registration'=>$vars['client_registration'],
             'client_verify_email'=>isset($vars['client_verify_email'])?1:0,
+            'allow_auth_tokens' => isset($vars['allow_auth_tokens']) ? 1 : 0,
             'client_name_format'=>$vars['client_name_format'],
             'client_avatar'=>$vars['client_avatar'],
         ));
@@ -1201,8 +1249,8 @@ class OsticketConfig extends Config {
             'show_assigned_tickets'=>isset($vars['show_assigned_tickets'])?0:1,
             'show_answered_tickets'=>isset($vars['show_answered_tickets'])?0:1,
             'show_related_tickets'=>isset($vars['show_related_tickets'])?1:0,
-            'hide_staff_name'=>isset($vars['hide_staff_name'])?1:0,
             'allow_client_updates'=>isset($vars['allow_client_updates'])?1:0,
+            'ticket_lock' => $vars['ticket_lock'],
         ));
     }
 
@@ -1337,6 +1385,14 @@ class OsticketConfig extends Config {
         return $this->getLogo('staff');
     }
 
+    function getStaffLoginBackdropId() {
+        return $this->get("staff_backdrop_id", false);
+    }
+    function getStaffLoginBackdrop() {
+        $id = $this->getStaffLoginBackdropId();
+        return ($id) ? AttachmentFile::lookup((int) $id) : null;
+    }
+
     function updatePagesSettings($vars, &$errors) {
         global $ost;
 
@@ -1356,6 +1412,17 @@ class OsticketConfig extends Config {
                 $errors['logo'] = sprintf(__('Unable to upload logo image: %s'), $error);
         }
 
+        if ($_FILES['backdrop']) {
+            $error = false;
+            list($backdrop) = AttachmentFile::format($_FILES['backdrop']);
+            if (!$backdrop)
+                ; // Pass
+            elseif ($backdrop['error'])
+                $errors['backdrop'] = $backdrop['error'];
+            elseif (!AttachmentFile::uploadBackdrop($backdrop, $error))
+                $errors['backdrop'] = sprintf(__('Unable to upload backdrop image: %s'), $error);
+        }
+
         $company = $ost->company;
         $company_form = $company->getForm();
         $company_form->setSource($_POST);
@@ -1370,7 +1437,13 @@ class OsticketConfig extends Config {
         if (isset($vars['delete-logo']))
             foreach ($vars['delete-logo'] as $id)
                 if (($vars['selected-logo'] != $id)
-                        && ($f = AttachmentFile::lookup($id)))
+                        && ($f = AttachmentFile::lookup((int) $id)))
+                    $f->delete();
+
+        if (isset($vars['delete-backdrop']))
+            foreach ($vars['delete-backdrop'] as $id)
+                if (($vars['selected-logo'] != $id)
+                        && ($f = AttachmentFile::lookup((int) $id)))
                     $f->delete();
 
         return $this->updateAll(array(
@@ -1383,6 +1456,9 @@ class OsticketConfig extends Config {
             'staff_logo_id' => (
                 (is_numeric($vars['selected-logo-scp']) && $vars['selected-logo-scp'])
                 ? $vars['selected-logo-scp'] : false),
+            'staff_backdrop_id' => (
+                (is_numeric($vars['selected-backdrop']) && $vars['selected-backdrop'])
+                ? $vars['selected-backdrop'] : false),
            ));
     }
 

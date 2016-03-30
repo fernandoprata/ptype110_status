@@ -23,7 +23,7 @@ class StaffNav {
 
     var $staff;
 
-    function StaffNav($staff, $panel='staff'){
+    function __construct($staff, $panel='staff'){
         $this->staff=$staff;
         $this->panel=strtolower($panel);
     }
@@ -206,8 +206,8 @@ class StaffNav {
 
 class AdminNav extends StaffNav{
 
-    function AdminNav($staff){
-        parent::StaffNav($staff, 'admin');
+    function __construct($staff){
+        parent::__construct($staff, 'admin');
     }
 
     function getRegisteredApps() {
@@ -296,7 +296,7 @@ class UserNav {
 
     var $user;
 
-    function UserNav($user=null, $active=''){
+    function __construct($user=null, $active=''){
 
         $this->user=$user;
         $this->navs=$this->getNavs();
@@ -344,7 +344,7 @@ class UserNav {
                 $navs['new']=array('desc'=>__('Open a New Ticket'),'href'=>'open.php','title'=>'');
             if($user && $user->isValid()) {
                 if(!$user->isGuest()) {
-                    $navs['tickets']=array('desc'=>sprintf(__('Tickets (%d)'),$user->getNumTickets()),
+                    $navs['tickets']=array('desc'=>sprintf(__('Tickets (%d)'),$user->getNumTickets($user->canSeeOrgTickets())),
                                            'href'=>'tickets.php',
                                             'title'=>__('Show all tickets'));
                 } else {

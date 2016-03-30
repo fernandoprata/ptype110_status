@@ -200,8 +200,13 @@ class Email extends VerySimpleModel {
         Dept::objects()
             ->filter(array('email_id' => $this->getId()))
             ->update(array(
-                'autoresp_email_id' => 0,
                 'email_id' => $cfg->getDefaultEmailId()
+            ));
+
+        Dept::objects()
+            ->filter(array('autoresp_email_id' => $this->getId()))
+            ->update(array(
+                'autoresp_email_id' => 0,
             ));
 
         return true;
@@ -219,7 +224,7 @@ class Email extends VerySimpleModel {
     }
 
     static function create($vars=false) {
-        $inst = parent::create($vars);
+        $inst = new static($vars);
         $inst->created = SqlFunction::NOW();
         return $inst;
     }

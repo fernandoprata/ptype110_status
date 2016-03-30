@@ -1,8 +1,10 @@
 <?php
 if(!defined('OSTSCPINC') || !$thisstaff) die('Access Denied');
 
-$qs = array();
+// Ensure cdata
+UserForm::ensureDynamicDataView();
 
+$qs = array();
 $users = User::objects()
     ->annotate(array('ticket_count'=>SqlAggregate::COUNT('tickets')));
 
@@ -50,7 +52,7 @@ $pageNav->setURL('users.php', $qs);
 $qstr.='&amp;order='.($order=='-' ? 'ASC' : 'DESC');
 
 //echo $query;
-$_SESSION[':Q:users'] = clone $users;
+$_SESSION[':Q:users'] = $users;
 
 $users->values('id', 'name', 'default_email__address', 'account__id',
     'account__status', 'created', 'updated');
@@ -62,7 +64,7 @@ $users->order_by($order . $order_column);
             <?php csrf_token(); ?>
             <input type="hidden" name="a" value="search">
             <div class="attached input">
-                <input type="search" class="basic-search" id="basic-user-search" name="query"
+                <input type="text" class="basic-search" id="basic-user-search" name="query"
                          size="30" value="<?php echo Format::htmlchars($_REQUEST['query']); ?>"
                         autocomplete="off" autocorrect="off" autocapitalize="off">
             <!-- <td>&nbsp;&nbsp;<a href="" id="advanced-user-search">[advanced]</a></td> -->
@@ -150,9 +152,9 @@ else
     <thead>
         <tr>
             <th nowrap width="4%">&nbsp;</th>
-            <th width="45%"><a <?php echo $name_sort; ?> href="users.php?<?php
+            <th><a <?php echo $name_sort; ?> href="users.php?<?php
                 echo $qstr; ?>&sort=name"><?php echo __('Name'); ?></a></th>
-            <th width="11%"><a  <?php echo $status_sort; ?> href="users.php?<?php
+            <th width="22%"><a  <?php echo $status_sort; ?> href="users.php?<?php
                 echo $qstr; ?>&sort=status"><?php echo __('Status'); ?></a></th>
             <th width="20%"><a <?php echo $create_sort; ?> href="users.php?<?php
                 echo $qstr; ?>&sort=create"><?php echo __('Created'); ?></a></th>
@@ -205,7 +207,7 @@ else
     <tfoot>
      <tr>
         <td colspan="7">
-            <?php if ($res && $num) { ?>
+            <?php if ($total) { ?>
             <?php echo __('Select');?>:&nbsp;
             <a id="selectAll" href="#ckb"><?php echo __('All');?></a>&nbsp;&nbsp;
             <a id="selectNone" href="#ckb"><?php echo __('None');?></a>&nbsp;&nbsp;

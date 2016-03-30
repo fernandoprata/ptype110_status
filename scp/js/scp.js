@@ -256,7 +256,7 @@ var scp_prep = function() {
         source: function (typeahead, query) {
             if (last_req) last_req.abort();
             var $el = this.$element;
-            var url = $el.data('url')+'?q='+query;
+            var url = $el.data('url')+'?q='+encodeURIComponent(query);
             last_req = $.ajax({
                 url: url,
                 dataType: 'json',
@@ -270,6 +270,9 @@ var scp_prep = function() {
             var form = $el.closest('form');
             form.find('input[name=search-type]').val('typeahead');
             $el.val(obj.value);
+            if (obj.id) {
+                form.append($('<input type="hidden" name="number">').val(obj.id))
+            }
             form.submit();
         },
         property: "matches"
@@ -463,6 +466,10 @@ var scp_prep = function() {
   });
 
   $('[data-toggle="tooltip"]').tooltip()
+
+  $('[data-toggle="tooltip"]').on('click', function() {
+        $(this).tooltip('hide');
+  });
 
   $('.attached.input input[autofocus]').parent().addClass('focus')
   $('.attached.input input')
@@ -746,7 +753,7 @@ $.confirm = function(message, title, options) {
                 .append($('<input type="button" class="close"/>')
                     .attr('value', __('Cancel'))
                     .click(function() { hide(); })
-            )).append($('<span class="buttons pull-right">test</span>')
+            )).append($('<span class="buttons pull-right"></span>')
                 .append($('<input type="button"/>')
                     .attr('value', __('OK'))
                     .click(function() {  hide(); D.resolve(body.find('input').serializeArray()); })
@@ -1050,10 +1057,18 @@ if ($.support.pjax) {
     var $this = $(this);
     if (!$this.hasClass('no-pjax')
         && !$this.closest('.no-pjax').length
-        && $this.attr('href')[0] != '#')
+        && $this.attr('href').charAt(0) != '#')
       $.pjax.click(event, {container: $this.data('pjaxContainer') || $('#pjax-container'), timeout: 2000});
   })
 }
+
+$(document).on('click', '.link:not(a):not(.button)', function(event) {
+  var $e = $(event.currentTarget);
+  $('<a>').attr({href: $e.attr('href'), 'class': $e.attr('class')})
+    .hide()
+    .insertBefore($e)
+    .get(0).click(event);
+});
 
 // Quick-Add dialogs
 $(document).on('change', 'select[data-quick-add]', function() {

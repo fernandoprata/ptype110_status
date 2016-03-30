@@ -31,6 +31,50 @@ $sort_options = array(
     'hot' =>                __('Longest Thread'),
     'relevance' =>          __('Relevance'),
 );
+
+// Queues columns
+
+$queue_columns = array(
+        'number' => array(
+            'width' => '7.4%',
+            'heading' => __('Number'),
+            ),
+        'date' => array(
+            'width' => '14.6%',
+            'heading' => __('Date Created'),
+            'sort_col' => 'created',
+            ),
+        'subject' => array(
+            'width' => '29.8%',
+            'heading' => __('Subject'),
+            'sort_col' => 'cdata__subject',
+            ),
+        'name' => array(
+            'width' => '18.1%',
+            'heading' => __('From'),
+            'sort_col' =>  'user__name',
+            ),
+        'status' => array(
+            'width' => '8.4%',
+            'heading' => __('Status'),
+            'sort_col' => 'status_id',
+            ),
+        'priority' => array(
+            'width' => '8.4%',
+            'heading' => __('Priority'),
+            'sort_col' => 'cdata__priority__priority_urgency',
+            ),
+        'assignee' => array(
+            'width' => '16%',
+            'heading' => __('Agent'),
+            ),
+        'dept' => array(
+            'width' => '16%',
+            'heading' => __('Department'),
+            'sort_col'  => 'dept__name',
+            ),
+        );
+
 $use_subquery = true;
 
 // Figure out the queue we're viewing
@@ -81,34 +125,52 @@ case 'search':
     if ($_REQUEST['query']) {
         $results_type=__('Search Results');
         // Use an index if possible
-        if ($_REQUEST['search-type'] == 'typeahead' && Validator::is_email($_REQUEST['query'])) {
-            $tickets = $tickets->filter(array(
-                'user__emails__address' => $_REQUEST['query'],
-            ));
-        }
-        else {
-            $basic_search = Q::any(array(
-                'number__startswith' => $_REQUEST['query'],
-                'user__name__contains' => $_REQUEST['query'],
-                'user__emails__address__contains' => $_REQUEST['query'],
-                'user__org__name__contains' => $_REQUEST['query'],
-            ));
-            $tickets->filter($basic_search);
-            if (!$_REQUEST['search-type']) {
-                // [Search] click, consider keywords too. This is a
-                // relatively ugly hack. SearchBackend::find() add in a
-                // constraint for the search. We need to pop that off and
-                // include it as an OR with the above constraints
-                $keywords = TicketModel::objects();
-                $keywords->extra(array('select' => array('ticket_id' => 'Z1.ticket_id')));
-                $keywords = $ost->searcher->find($_REQUEST['query'], $keywords);
-                $tickets->values('ticket_id')->annotate(array('__relevance__' => new SqlCode(0.5)));
-                $keywords->aggregated = true; // Hack to prevent select ticket.*
-                $tickets->union($keywords)->order_by(new SqlCode('__relevance__'), QuerySet::DESC);
+        if ($_REQUEST['search-type'] == 'typeahead') {
+            if (Validator::is_email($_REQUEST['query'])) {
+                $tickets = $tickets->filter(array(
+                    'user__emails__address' => $_REQUEST['query'],
+                ));
             }
+            elseif ($_REQUEST['query']) {
+                $tickets = $tickets->filter(array(
+                    'number' => $_REQUEST['query'],
+                ));
+            }
+        }
+        elseif (isset($_REQUEST['query'])
+            && ($q = trim($_REQUEST['query']))
+            && strlen($q) > 2
+        ) {
+            // [Search] click, consider keywords
+            $__tickets = $ost->searcher->find($q, $tickets);
+            if (!count($__tickets) && preg_match('`\w$`u', $q)) {
+                // Do wildcard search if no hits
+                $__tickets = $ost->searcher->find($q.'*', $tickets);
+            }
+            $tickets = $__tickets;
+            $has_relevance = true;
         }
         // Clear sticky search queue
         unset($_SESSION[$queue_key]);
+        break;
+    }
+    // Apply user filter
+    elseif (isset($_GET['uid']) && ($user = User::lookup($_GET['uid']))) {
+        $tickets->filter(array('user__id'=>$_GET['uid']));
+        $results_type = sprintf('%s — %s', __('Search Results'),
+            $user->getName());
+        if (isset($_GET['status']))
+            $status = $_GET['status'];
+        // Don't apply normal open ticket
+        break;
+    }
+    elseif (isset($_GET['orgid']) && ($org = Organization::lookup($_GET['orgid']))) {
+        $tickets->filter(array('user__org_id'=>$_GET['orgid']));
+        $results_type = sprintf('%s — %s', __('Search Results'),
+            $org->getName());
+        if (isset($_GET['status']))
+            $status = $_GET['status'];
+        // Don't apply normal open ticket
         break;
     } elseif (isset($_SESSION['advsearch'])) {
         $form = $search->getFormFromSession('advsearch');
@@ -124,24 +186,10 @@ case 'search':
         }
         break;
     }
-    // Apply user filter
-    elseif (isset($_GET['uid']) && ($user = User::lookup($_GET['uid']))) {
-        $tickets->filter(array('user__id'=>$_GET['uid']));
-        $results_type = sprintf('%s — %s', __('Search Results'),
-            $user->getName());
-        // Don't apply normal open ticket
-        break;
-    }
-    elseif (isset($_GET['orgid']) && ($org = Organization::lookup($_GET['orgid']))) {
-        $tickets->filter(array('user__org_id'=>$_GET['orgid']));
-        $results_type = sprintf('%s — %s', __('Search Results'),
-            $org->getName());
-        // Don't apply normal open ticket
-        break;
-    }
     // Fall-through and show open tickets
 case 'open':
     $status='open';
+    $queue_name = $queue_name ?: 'open';
     $results_type=__('Open Tickets');
     if (!$cfg->showAnsweredTickets())
         $tickets->filter(array('isanswered'=>0));
@@ -193,21 +241,6 @@ $pageNav = new Pagenate($count, $page, PAGE_LIMIT);
 $pageNav->setURL('tickets.php', $args);
 $tickets = $pageNav->paginate($tickets);
 
-// Rewrite $tickets to use a nested query, which will include the LIMIT part
-// in order to speed the result
-//
-// ATM, advanced search with keywords doesn't support the subquery approach
-if ($use_subquery) {
-    $orig_tickets = clone $tickets;
-    $tickets2 = TicketModel::objects();
-    $tickets2->values = $tickets->values;
-    $tickets2->filter(array('ticket_id__in' => $tickets->values_flat('ticket_id')));
-
-    // Transfer the order_by from the original tickets
-    $tickets2->order_by($orig_tickets->getSortFields());
-    $tickets = $tickets2;
-}
-
 // Apply requested sorting
 $queue_sort_key = sprintf(':Q%s:%s:sort', ObjectModel::OBJECT_TYPE_TICKET, $queue_name);
 
@@ -232,6 +265,7 @@ $orm_dir_r = $sort_dir ? QuerySet::DESC : QuerySet::ASC;
 
 switch ($sort_cols) {
 case 'number':
+    $queue_columns['number']['sort_dir'] = $sort_dir;
     $tickets->extra(array(
         'order_by'=>array(
             array(SqlExpression::times(new SqlField('number'), 1), $orm_dir)
@@ -240,35 +274,40 @@ case 'number':
     break;
 
 case 'priority,created':
-    $tickets->order_by(($sort_dir ? '-' : '') . 'cdata__priority__priority_urgency');
+    $tickets->order_by(($sort_dir ? '-' : '') . 'cdata__:priority__priority_urgency');
     // Fall through to columns for `created`
 case 'created':
-    $date_header = __('Date Created');
-    $date_col = 'created';
+    $queue_columns['date']['heading'] = __('Date Created');
+    $queue_columns['date']['sort_col'] = $date_col = 'created';
     $tickets->values('created');
     $tickets->order_by($sort_dir ? 'created' : '-created');
     break;
 
 case 'priority,due':
-    $tickets->order_by('cdata__priority__priority_urgency', $orm_dir_r);
+    $tickets->order_by('cdata__:priority__priority_urgency', $orm_dir_r);
     // Fall through to add in due date filter
 case 'due':
-    $date_header = __('Due Date');
-    $date_col = 'est_duedate';
+    $queue_columns['date']['heading'] = __('Due Date');
+    $queue_columns['date']['sort'] = 'due';
+    $queue_columns['date']['sort_col'] = $date_col = 'est_duedate';
     $tickets->values('est_duedate');
     $tickets->order_by(SqlFunction::COALESCE(new SqlField('est_duedate'), 'zzz'), $orm_dir_r);
     break;
 
 case 'closed':
-    $date_header = __('Date Closed');
-    $date_col = 'closed';
+    $queue_columns['date']['heading'] = __('Date Closed');
+    $queue_columns['date']['sort'] = $sort_cols;
+    $queue_columns['date']['sort_col'] = $date_col = 'closed';
+    $queue_columns['date']['sort_dir'] = $sort_dir;
     $tickets->values('closed');
     $tickets->order_by('closed', $orm_dir);
     break;
 
 case 'answered':
-    $date_header = __('Last Response');
-    $date_col = 'thread__lastresponse';
+    $queue_columns['date']['heading'] = __('Last Response');
+    $queue_columns['date']['sort'] = $sort_cols;
+    $queue_columns['date']['sort_col'] = $date_col = 'thread__lastresponse';
+    $queue_columns['date']['sort_dir'] = $sort_dir;
     $date_fallback = '<em class="faded">'.__('unanswered').'</em>';
     $tickets->order_by('thread__lastresponse', $orm_dir);
     $tickets->values('thread__lastresponse');
@@ -285,16 +324,46 @@ case 'relevance':
     $tickets->order_by(new SqlCode('__relevance__'), $orm_dir);
     break;
 
+case 'assignee':
+    $tickets->order_by('staff__lastname', $orm_dir);
+    $tickets->order_by('staff__firstname', $orm_dir);
+    $tickets->order_by('team__name', $orm_dir);
+    $queue_columns['assignee']['sort_dir'] = $sort_dir;
+    break;
+
 default:
+    if ($sort_cols && isset($queue_columns[$sort_cols])) {
+        $queue_columns[$sort_cols]['sort_dir'] = $sort_dir;
+        if (isset($queue_columns[$sort_cols]['sort_col']))
+            $sort_cols = $queue_columns[$sort_cols]['sort_col'];
+        $tickets->order_by($sort_cols, $orm_dir);
+        break;
+    }
+
 case 'priority,updated':
-    $tickets->order_by('cdata__priority__priority_urgency', $orm_dir_r);
+    $tickets->order_by('cdata__:priority__priority_urgency', $orm_dir_r);
     // Fall through for columns defined for `updated`
 case 'updated':
-    $date_header = __('Last Updated');
-    $date_col = 'lastupdate';
+    $queue_columns['date']['heading'] = __('Last Updated');
+    $queue_columns['date']['sort'] = $sort_cols;
+    $queue_columns['date']['sort_col'] = $date_col = 'lastupdate';
     $tickets->order_by('lastupdate', $orm_dir);
     break;
 }
+
+if (in_array($sort_cols, array('created', 'due', 'updated')))
+    $queue_columns['date']['sort_dir'] = $sort_dir;
+
+// Rewrite $tickets to use a nested query, which will include the LIMIT part
+// in order to speed the result
+$orig_tickets = clone $tickets;
+$tickets2 = TicketModel::objects();
+$tickets2->values = $tickets->values;
+$tickets2->filter(array('ticket_id__in' => $tickets->values_flat('ticket_id')));
+
+// Transfer the order_by from the original tickets
+$tickets2->order_by($orig_tickets->getSortFields());
+$tickets = $tickets2;
 
 // Save the query to the session for exporting
 $_SESSION[':Q:tickets'] = $tickets;
@@ -303,7 +372,10 @@ TicketForm::ensureDynamicDataView();
 
 // Select pertinent columns
 // ------------------------------------------------------------
-$tickets->values('lock__staff_id', 'staff_id', 'isoverdue', 'team_id', 'ticket_id', 'number', 'cdata__subject', 'user__default_email__address', 'source', 'cdata__priority__priority_color', 'cdata__priority__priority_desc', 'status_id', 'status__name', 'status__state', 'dept_id', 'dept__name', 'user__name', 'lastupdate', 'isanswered', 'staff__firstname', 'staff__lastname', 'team__name');
+$tickets->values('lock__staff_id', 'staff_id', 'isoverdue', 'team_id',
+'ticket_id', 'number', 'cdata__subject', 'user__default_email__address',
+'source', 'cdata__:priority__priority_color', 'cdata__:priority__priority_desc', 'status_id', 'status__name', 'status__state', 'dept_id', 'dept__name', 'user__name', 'lastupdate', 'isanswered', 'staff__firstname', 'staff__lastname', 'team__name');
+
 // Add in annotations
 $tickets->annotate(array(
     'collab_count' => TicketThread::objects()
@@ -318,6 +390,11 @@ $tickets->annotate(array(
         ->exclude(array('entries__flags__hasbit' => ThreadEntry::FLAG_HIDDEN))
         ->aggregate(array('count' => SqlAggregate::COUNT('entries__id'))),
 ));
+
+
+// Make sure we're only getting active locks
+$tickets->constrain(array('lock' => array(
+                'lock__expire__gt' => SqlFunction::NOW())));
 
 ?>
 
@@ -380,44 +457,43 @@ return false;">
  <table class="list" border="0" cellspacing="1" cellpadding="2" width="940">
     <thead>
         <tr>
-            <?php if ($thisstaff->canManageTickets()) { ?>
+            <?php
+            if ($thisstaff->canManageTickets()) { ?>
 	        <th width="2%">&nbsp;</th>
             <?php } ?>
-	        <th width="7.4%">
-                <?php echo __('Ticket'); ?></th>
-	        <th width="14.6%">
-                <?php echo $date_header ?: __('Date Created'); ?></th>
-	        <th width="29.8%">
-                <?php echo __('Subject'); ?></th>
-            <th width="18.1%">
-                <?php echo __('From');?></th>
-            <?php
-            if($search && !$status) { ?>
-                <th width="8.4%">
-                    <?php echo __('Status');?></th>
-            <?php
-            } else { ?>
-                <th width="8.4%" <?php echo $pri_sort;?>>
-                    <?php echo __('Priority');?></th>
-            <?php
-            }
 
-            if($showassigned ) {
-                //Closed by
-                if(!strcasecmp($status,'closed')) { ?>
-                    <th width="16%">
-                        <?php echo __('Closed By'); ?></th>
-                <?php
-                } else { //assigned to ?>
-                    <th width="16%">
-                        <?php echo __('Assigned To'); ?></th>
-                <?php
-                }
-            } else { ?>
-                <th width="16%">
-                    <?php echo __('Department');?></th>
             <?php
-            } ?>
+            // Swap some columns based on the queue.
+            if ($showassigned ) {
+                unset($queue_columns['dept']);
+                if (!strcasecmp($status,'closed'))
+                    $queue_columns['assignee']['heading'] =  __('Closed By');
+                else
+                    $queue_columns['assignee']['heading'] =  __('Assigned To');
+            } else {
+                unset($queue_columns['assignee']);
+            }
+            if ($search && !$status)
+                unset($queue_columns['priority']);
+            else
+                unset($queue_columns['status']);
+
+            // Query string
+            unset($args['sort'], $args['dir'], $args['_pjax']);
+            $qstr = Http::build_query($args);
+            // Show headers
+            foreach ($queue_columns as $k => $column) {
+                echo sprintf( '<th width="%s"><a href="?sort=%s&dir=%s&%s"
+                        class="%s">%s</a></th>',
+                        $column['width'],
+                        $column['sort'] ?: $k,
+                        $column['sort_dir'] ? 0 : 1,
+                        $qstr,
+                        isset($column['sort_dir'])
+                        ? ($column['sort_dir'] ? 'asc': 'desc') : '',
+                        $column['heading']);
+            }
+            ?>
         </tr>
      </thead>
      <tbody>
@@ -472,18 +548,18 @@ return false;">
                     data-preview="#tickets/<?php echo $T['ticket_id']; ?>/preview"
                     ><?php echo $tid; ?></a></td>
                 <td align="center" nowrap><?php echo Format::datetime($T[$date_col ?: 'lastupdate']) ?: $date_fallback; ?></td>
-                <td><a <?php if ($flag) { ?> class="Icon <?php echo $flag; ?>Ticket" title="<?php echo ucfirst($flag); ?> Ticket" <?php } ?>
-                    style="max-width: <?php
-                    $base = 280;
+                <td><div style="max-width: <?php
+                    $base = 279;
                     // Make room for the paperclip and some extra
                     if ($T['attachment_count']) $base -= 18;
                     // Assume about 8px per digit character
                     if ($threadcount > 1) $base -= 20 + ((int) log($threadcount, 10) + 1) * 8;
                     // Make room for overdue flag and friends
                     if ($flag) $base -= 20;
-                    echo $base; ?>px;"
-                    href="tickets.php?id=<?php echo $T['ticket_id']; ?>"><span
-                    class="truncate"><?php echo $subject; ?></span></a>
+                    echo $base; ?>px; max-height: 1.2em"
+                    class="<?php if ($flag) { ?>Icon <?php echo $flag; ?>Ticket <?php } ?>link truncate"
+                    <?php if ($flag) { ?> title="<?php echo ucfirst($flag); ?> Ticket" <?php } ?>
+                    href="tickets.php?id=<?php echo $T['ticket_id']; ?>"><?php echo $subject; ?></div>
 <?php               if ($T['attachment_count'])
                         echo '<i class="small icon-paperclip icon-flip-horizontal" data-toggle="tooltip" title="'
                             .$T['attachment_count'].'"></i>';
@@ -509,8 +585,9 @@ return false;">
                         $displaystatus="<b>$displaystatus</b>";
                     echo "<td>$displaystatus</td>";
                 } else { ?>
-                <td class="nohover" align="center" style="background-color:<?php echo $T['cdata__priority__priority_color']; ?>;">
-                    <?php echo $T['cdata__priority__priority_desc']; ?></td>
+                <td class="nohover" align="center"
+                    style="background-color:<?php echo $T['cdata__:priority__priority_color']; ?>;">
+                    <?php echo $T['cdata__:priority__priority_desc']; ?></td>
                 <?php
                 }
                 ?>
@@ -577,21 +654,6 @@ return false;">
 </div>
 <script type="text/javascript">
 $(function() {
-    $(document).off('.tickets');
-    $(document).on('click.tickets', 'a.tickets-action', function(e) {
-        e.preventDefault();
-        var count = checkbox_checker($('form#tickets'), 1);
-        if (count) {
-            var url = 'ajax.php/'
-            +$(this).attr('href').substr(1)
-            +'?count='+count
-            +'&_uid='+new Date().getTime();
-            $.dialog(url, [201], function (xhr) {
-                $.pjax.reload('#pjax-container');
-             });
-        }
-        return false;
-    });
     $('[data-toggle=tooltip]').tooltip();
 });
 </script>

@@ -53,6 +53,7 @@ class Thread extends VerySimpleModel {
     const MODE_CLIENT = 2;
 
     var $_object;
+    var $_entries;
     var $_collaborators; // Cache for collabs
     var $_participants;
 
@@ -87,7 +88,6 @@ class Thread extends VerySimpleModel {
         return $this->entries->count();
     }
 
-    var $_entries;
     function getEntries($criteria=false) {
         if (!isset($this->_entries)) {
             $this->_entries = $this->entries->annotate(array(
@@ -244,6 +244,9 @@ class Thread extends VerySimpleModel {
         if ($type && is_array($type))
             $entries->filter(array('type__in' => $type));
 
+        if ($options['sort'] && !strcasecmp($options['sort'], 'DESC'))
+            $entries->order_by('-id');
+
         // Precache all the attachments on this thread
         AttachmentFile::objects()->filter(array(
             'attachments__thread_entry__thread__id' => $this->id
@@ -277,9 +280,7 @@ class Thread extends VerySimpleModel {
      *      - subject - (string) email subject line (decoded)
      *      - body - (string) email message body (decoded)
      */
-    function postEmail($mailinfo) {
-        global $ost;
-
+    function postEmail($mailinfo, $entry=null) {
         // +==================+===================+=============+
         // | Orig Thread-Type | Reply Thread-Type | Requires    |
         // +==================+===================+=============+
@@ -303,27 +304,6 @@ class Thread extends VerySimpleModel {
             return false;
         }
 
-        // Mail sent by this system will have a message-id format of
-        // <code-random-mailbox@domain.tld>
-        // where code is a predictable string based on the SECRET_SALT of
-        // this osTicket installation. If this incoming mail matches the
-        // code, then it very likely originated from this system and looped
-        @list($code) = explode('-', $mailinfo['mid'], 2);
-        if (0 === strcasecmp(ltrim($code, '<'), substr(md5('mail'.SECRET_SALT), -9))) {
-            // This mail was sent by this system. It was received due to
-            // some kind of mail delivery loop. It should not be considered
-            // a response to an existing thread entry
-            if ($ost) $ost->log(LOG_ERR, _S('Email loop detected'), sprintf(
-                _S('It appears as though &lt;%s&gt; is being used as a forwarded or fetched email account and is also being used as a user / system account. Please correct the loop or seek technical assistance.'),
-                $mailinfo['email']),
-
-                // This is quite intentional -- don't continue the loop
-                false,
-                // Force the message, even if logging is disabled
-                true);
-            return true;
-        }
-
         $vars = array(
             'mid' =>    $mailinfo['mid'],
             'header' => $mailinfo['header'],
@@ -331,7 +311,7 @@ class Thread extends VerySimpleModel {
             'origin' => 'Email',
             'source' => 'Email',
             'ip' =>     '',
-            'reply_to' => $this,
+            'reply_to' => $entry,
             'recipients' => $mailinfo['recipients'],
             'to-email-id' => $mailinfo['to-email-id'],
         );
@@ -348,99 +328,100 @@ class Thread extends VerySimpleModel {
             $vars['attachments'] = $mailinfo['attachments'];
 
         $body = $mailinfo['message'];
-        $poster = $mailinfo['email'];
 
-        // Disambiguate if the user happens also to be a staff member of the
-        // system. The current ticket owner should _always_ post messages
-        // instead of notes or responses
-        if ($mailinfo['userId'] || (
-            $object instanceof Ticket
-            && strcasecmp($mailinfo['email'], $object->getEmail()) == 0
-        )) {
-            $vars['message'] = $body;
-            $vars['userId'] = $mailinfo['userId'] ?: $object->getUserId();
-
-            if ($object instanceof Threadable)
-                return $object->postThreadEntry('M', $vars);
-            elseif ($this instanceof ObjectThread)
-                $this->addMessage($vars, $errors);
-            else
-                throw new Exception('Cannot continue discussion with abstract thread');
-        }
-        // Consider collaborator role (disambiguate staff members as
-        // collaborators). Normally, the block above should match based
-        // on the Referenced message-id header
-        elseif ($object instanceof Ticket
-            && ($E = UserEmail::lookup($mailinfo['email']))
-            && ($C = Collaborator::lookup(array(
-                'ticketId' => $object->getId(), 'userId' => $E->user_id
-            )))
-        ) {
-            $vars['userId'] = $mailinfo['userId'] ?: $C->getUserId();
-            $vars['message'] = $body;
+        // Attempt to determine the user posting the entry and the
+        // corresponding entry type by the information determined by the
+        // mail parser (via the In-Reply-To header)
+        switch ($mailinfo['userClass']) {
+        case 'C': # Thread collaborator
             $vars['flags'] = ThreadEntry::FLAG_COLLABORATOR;
+        case 'U': # Ticket owner
+            $vars['thread-type'] = 'M';
+            $vars['userId'] = $mailinfo['userId'];
+            break;
+
+        case 'A': # System administrator
+        case 'S': # Staff member (agent)
+            $vars['thread-type'] = 'N';
+            $vars['staffId'] = $mailinfo['staffId'];
+            if ($vars['staffId'])
+                $vars['poster'] = Staff::lookup($mailinfo['staffId']);
+            break;
+
+        // The user type was not identified by the mail parsing system. It
+        // is likely that the In-Reply-To and References headers were not
+        // properly brokered by the user's mail client. Use the old logic to
+        // determine the post type.
+        default:
+            // Disambiguate if the user happens also to be a staff member of
+            // the system. The current ticket owner should _always_ post
+            // messages instead of notes or responses
+            if ($object instanceof Ticket
+                && strcasecmp($mailinfo['email'], $object->getEmail()) == 0
+            ) {
+                $vars['thread-type'] = 'M';
+                $vars['userId'] = $object->getUserId();
+            }
+            // Consider collaborator role (disambiguate staff members as
+            // collaborators). Normally, the block above should match based
+            // on the Referenced message-id header
+            elseif ($C = $this->collaborators->filter(array(
+                'user__emails__address' => $mailinfo['email']
+            ))->first()) {
+                $vars['thread-type'] = 'M';
+                // XXX: There's no way that mailinfo[userId] would be set
+                $vars['userId'] = $mailinfo['userId'] ?: $C->getUserId();
+                $vars['flags'] = ThreadEntry::FLAG_COLLABORATOR;
+            }
+            // Don't process the email -- it came FROM this system
+            elseif (Email::getIdByEmail($mailinfo['email'])) {
+                return false;
+            }
+        }
+
+        // Ensure we record the name of the person posting
+        $vars['poster'] = $vars['poster']
+            ?: $mailinfo['name'] ?: $mailinfo['email'];
+
+        // TODO: Consider security constraints
+        if (!$vars['thread-type']) {
+            //XXX: Are we potentially leaking the email address to
+            // collaborators?
+            // Try not to destroy the format of the body
+            $header = sprintf(
+                _S('Received From: %1$s <%2$s>') . "\n\n",
+                $mailinfo['name'], $mailinfo['email']);
+            if ($body instanceof HtmlThreadEntryBody)
+                $header = nl2br(Format::htmlchars($header));
+            // Add the banner to the top of the message
+            if ($body instanceof ThreadEntryBody)
+                $body->prepend($header);
+            $vars['userId'] = 0; //Unknown user! //XXX: Assume ticket owner?
+            $vars['thread-type'] = 'M';
+        }
+
+        switch ($vars['thread-type']) {
+        case 'M':
+            $vars['message'] = $body;
 
             if ($object instanceof Threadable)
                 return $object->postThreadEntry('M', $vars);
             elseif ($this instanceof ObjectThread)
-                $this->addMessage($vars, $errors);
-            else
-                throw new Exception('Cannot continue discussion with abstract thread');
-        }
-        // Accept internal note from staff members' replies
-        elseif ($mailinfo['staffId']
-                || ($mailinfo['staffId'] = Staff::getIdByEmail($mailinfo['email']))) {
-            $vars['staffId'] = $mailinfo['staffId'];
-            $vars['poster'] = Staff::lookup($mailinfo['staffId']);
+                return $this->addMessage($vars, $errors);
+            break;
+
+        case 'N':
             $vars['note'] = $body;
 
             if ($object instanceof Threadable)
                 return $object->postThreadEntry('N', $vars);
             elseif ($this instanceof ObjectThread)
                 return $this->addNote($vars, $errors);
-            else
-                throw new Exception('Cannot continue discussion with abstract thread');
+            break;
         }
-        elseif (Email::getIdByEmail($mailinfo['email'])) {
-            // Don't process the email -- it came FROM this system
-            return true;
-        }
-        // Support the mail parsing system declaring a thread-type
-        elseif (isset($mailinfo['thread-type'])) {
-            switch ($mailinfo['thread-type']) {
-            case 'N':
-                $vars['note'] = $body;
-                $vars['poster'] = $poster;
-                if ($object instanceof Threadable)
-                    return $object->postThreadEntry('N', $vars);
-                elseif ($this instanceof ObjectThread)
-                    return $this->addNote($vars, $errors);
-                else
-                    throw new Exception('Cannot continue discussion with abstract thread');
-            }
-        }
-        // TODO: Consider security constraints
-        else {
-            //XXX: Are we potentially leaking the email address to
-            // collaborators?
-            // Try not to destroy the format of the body
-            $header = sprintf("Received From: %s <%s>\n\n", $mailinfo['name'],
-                $mailinfo['email']);
-            if ($body instanceof HtmlThreadEntryBody)
-                $header = nl2br(Format::htmlchars($header));
-            // Add the banner to the top of the message
-            if ($body instanceof ThreadEntryBody)
-                $body->prepend($header);
-            $vars['message'] = $body;
-            $vars['userId'] = 0; //Unknown user! //XXX: Assume ticket owner?
-            $vars['origin'] = 'Email';
-            if ($object instanceof Threadable)
-                return $object->postThreadEntry('M', $vars);
-            elseif ($this instanceof ObjectThread)
-                return $this->addMessage($vars, $errors);
-            else
-                throw new Exception('Cannot continue discussion with abstract thread');
-        }
+
+        throw new Exception('Unable to continue thread via email.');
+
         // Currently impossible, but indicate that this thread object could
         // not append the incoming email.
         return false;
@@ -476,13 +457,13 @@ class Thread extends VerySimpleModel {
      */
     function lookupByEmailHeaders(&$mailinfo) {
         $possibles = array();
-        foreach (array('in-reply-to', 'references') as $header) {
+        foreach (array('mid', 'in-reply-to', 'references') as $header) {
             $matches = array();
             if (!isset($mailinfo[$header]) || !$mailinfo[$header])
                 continue;
             // Header may have multiple entries (usually separated by
             // spaces ( )
-            elseif (!preg_match_all('/<[^>@]+@[^>]+>/', $mailinfo[$header],
+            elseif (!preg_match_all('/<([^>@]+@[^>]+)>/', $mailinfo[$header],
                         $matches))
                 continue;
 
@@ -490,12 +471,12 @@ class Thread extends VerySimpleModel {
             // (parent) on the far right.
             // @see rfc 1036, section 2.2.5
             // @see http://www.jwz.org/doc/threading.html
-            $possibles = array_merge($possibles, array_reverse($matches[0]));
+            $possibles = array_merge($possibles, array_reverse($matches[1]));
         }
 
         // Add the message id if it is embedded in the body
         $match = array();
-        if (preg_match('`(?:data-mid="|Ref-Mid: )([^"\s]*)(?:$|")`',
+        if (preg_match('`(?:class="mid-|Ref-Mid: )([^"\s]*)(?:$|")`',
                 $mailinfo['message'], $match)
             && !in_array($match[1], $possibles)
         ) {
@@ -509,7 +490,9 @@ class Thread extends VerySimpleModel {
             // from this help desk, the 'loopback' property will be set
             // to true.
             $mid_info = Mailer::decodeMessageId($mid);
-            if ($mid_info['loopback'] && isset($mid_info['uid'])
+            if (!$mid_info || !$mid_info['loopback'])
+                continue;
+            if (isset($mid_info['uid'])
                 && @$mid_info['threadId']
                 && ($t = Thread::lookup($mid_info['threadId']))
             ) {
@@ -550,8 +533,8 @@ class Thread extends VerySimpleModel {
         return true;
     }
 
-    static function create($vars) {
-        $inst = parent::create($vars);
+    static function create($vars=false) {
+        $inst = new static($vars);
         $inst->created = SqlFunction::NOW();
         return $inst;
     }
@@ -614,12 +597,15 @@ implements TemplateVariable {
 
     const FLAG_COLLABORATOR             = 0x0020;   // Message from collaborator
     const FLAG_BALANCED                 = 0x0040;   // HTML does not need to be balanced on ::display()
+    const FLAG_SYSTEM                   = 0x0080;   // Entry is a system note.
 
     const PERM_EDIT     = 'thread.edit';
 
     var $_headers;
     var $_thread;
     var $_actions;
+    var $is_autoreply;
+    var $is_bounce;
 
     static protected $perms = array(
         self::PERM_EDIT => array(
@@ -629,6 +615,8 @@ implements TemplateVariable {
     );
 
     function postEmail($mailinfo) {
+        global $ost;
+
         if (!($thread = $this->getThread()))
             // Kind of hard to continue a discussion without a thread ...
             return false;
@@ -637,7 +625,27 @@ implements TemplateVariable {
             // Reporting success so the email can be moved or deleted.
             return true;
 
-        return $thread->postEmail($mailinfo);
+        // Mail sent by this system will have a predictable message-id
+        // If this incoming mail matches the code, then it very likely
+        // originated from this system and looped
+        $info = Mailer::decodeMessageId($mailinfo['mid']);
+        if ($info && $info['loopback']) {
+            // This mail was sent by this system. It was received due to
+            // some kind of mail delivery loop. It should not be considered
+            // a response to an existing thread entry
+            if ($ost)
+                $ost->log(LOG_ERR, _S('Email loop detected'), sprintf(
+                _S('It appears as though &lt;%s&gt; is being used as a forwarded or fetched email account and is also being used as a user / system account. Please correct the loop or seek technical assistance.'),
+                $mailinfo['email']),
+
+                // This is quite intentional -- don't continue the loop
+                false,
+                // Force the message, even if logging is disabled
+                true);
+            return $this;
+        }
+
+        return $thread->postEmail($mailinfo, $this);
     }
 
     function getId() {
@@ -869,6 +877,10 @@ implements TemplateVariable {
         return $this->set('flags', $this->get('flags') | $flag);
     }
 
+    function isSystem() {
+        return $this->hasFlag(self::FLAG_SYSTEM);
+    }
+
     //Web uploads - caller is expected to format, validate and set any errors.
     function uploadFiles($files) {
 
@@ -956,7 +968,7 @@ implements TemplateVariable {
         else
             return false;
 
-        $att = Attachment::create(array(
+        $att = new Attachment(array(
             'type' => 'H',
             'object_id' => $this->getId(),
             'file_id' => $fileId,
@@ -1052,7 +1064,7 @@ implements TemplateVariable {
         if (!$id || !$mid)
             return false;
 
-        $this->email_info = ThreadEntryEmailInfo::create(array(
+        $this->email_info = new ThreadEntryEmailInfo(array(
             'thread_entry_id' => $id,
             'mid' => $mid,
         ));
@@ -1126,6 +1138,7 @@ implements TemplateVariable {
         // in-reply-to header
         if ($entry = ThreadEntry::objects()
             ->filter(array('email_info__mid' => $mailinfo['mid']))
+            ->order_by(false)
             ->first()
         ) {
             $seen = true;
@@ -1133,13 +1146,13 @@ implements TemplateVariable {
         }
 
         $possibles = array();
-        foreach (array('in-reply-to', 'references') as $header) {
+        foreach (array('mid', 'in-reply-to', 'references') as $header) {
             $matches = array();
             if (!isset($mailinfo[$header]) || !$mailinfo[$header])
                 continue;
             // Header may have multiple entries (usually separated by
             // spaces ( )
-            elseif (!preg_match_all('/<[^>@]+@[^>]+>/', $mailinfo[$header],
+            elseif (!preg_match_all('/<([^>@]+@[^>]+)>/', $mailinfo[$header],
                         $matches))
                 continue;
 
@@ -1147,13 +1160,13 @@ implements TemplateVariable {
             // (parent) on the far right.
             // @see rfc 1036, section 2.2.5
             // @see http://www.jwz.org/doc/threading.html
-            $possibles = array_merge($possibles, array_reverse($matches[0]));
+            $possibles = array_merge($possibles, array_reverse($matches[1]));
         }
 
         // Add the message id if it is embedded in the body
         $match = array();
-        if (preg_match('`(?:data-mid="|Ref-Mid: )([^"\s]*)(?:$|")`',
-                $mailinfo['message'], $match)
+        if (preg_match('`(?:class="mid-|Ref-Mid: )([^"\s]*)(?:$|")`',
+                (string) $mailinfo['message'], $match)
             && !in_array($match[1], $possibles)
         ) {
             $possibles[] = $match[1];
@@ -1167,7 +1180,9 @@ implements TemplateVariable {
             // from this help desk, the 'loopback' property will be set
             // to true.
             $mid_info = Mailer::decodeMessageId($mid);
-            if ($mid_info['loopback'] && isset($mid_info['uid'])
+            if (!$mid_info || !$mid_info['loopback'])
+                continue;
+            if (isset($mid_info['uid'])
                 && @$mid_info['entryId']
                 && ($t = ThreadEntry::lookup($mid_info['entryId']))
                 && ($t->thread_id == $mid_info['threadId'])
@@ -1178,6 +1193,12 @@ implements TemplateVariable {
                 elseif (@$mid_info['staffId']) {
                     $mailinfo['staffId'] = $mid_info['staffId'];
                 }
+
+                // Capture the user type
+                if (@$mid_info['userClass'])
+                    $mailinfo['userClass'] = $mid_info['userClass'];
+
+
                 // ThreadEntry was positively identified
                 return $t;
             }
@@ -1191,7 +1212,8 @@ implements TemplateVariable {
                 $mid = "$left@$right";
             }
             $entries = ThreadEntry::objects()
-                ->filter(array('email_info__mid' => $mid));
+                ->filter(array('email_info__mid' => $mid))
+                ->order_by(false);
             foreach ($entries as $t) {
                 // Capture the first match thread item
                 if (!$thread)
@@ -1241,24 +1263,6 @@ implements TemplateVariable {
             }
         }
 
-        // Search for the message-id token in the body
-        // *DEPRECATED* the current algo on outgoing mail will use
-        // Mailer::getMessageId as the message id tagged here
-        if (preg_match('`(?:class="mid-|Ref-Mid: )([^"\s]*)(?:$|")`',
-                $mailinfo['message'], $match)) {
-            // Support new Message-Id format
-            if (($info = Mailer::decodeMessageId($match[1]))
-                && $info['loopback']
-                && $info['entryId']
-            ) {
-                return ThreadEntry::lookup($info['entryId']);
-            }
-            // Support old (deprecated) reference format
-            if ($thread = ThreadEntry::lookupByRefMessageId($match[1],
-                    $mailinfo['email']))
-                return $thread;
-        }
-
         return null;
     }
 
@@ -1305,8 +1309,10 @@ implements TemplateVariable {
     }
 
     //new entry ... we're trusting the caller to check validity of the data.
-    static function create($vars, &$errors=array()) {
+    static function create($vars=false) {
         global $cfg;
+
+        assert(is_array($vars));
 
         //Must have...
         if (!$vars['threadId'] || !$vars['type'])
@@ -1350,7 +1356,7 @@ implements TemplateVariable {
         if ($poster && is_object($poster))
             $poster = (string) $poster;
 
-        $entry = parent::create(array(
+        $entry = new static(array(
             'created' => SqlFunction::NOW(),
             'type' => $vars['type'],
             'thread_id' => $vars['threadId'],
@@ -1366,6 +1372,10 @@ implements TemplateVariable {
         if ($entry->format == 'html')
             // The current codebase properly balances html
             $entry->flags |= self::FLAG_BALANCED;
+
+        // Flag system messages
+        if (!($vars['staffId'] || $vars['userId']))
+            $entry->flags |= self::FLAG_SYSTEM;
 
         if (!isset($vars['attachments']) || !$vars['attachments'])
             // Otherwise, body will be configured in a block below (after
@@ -1557,7 +1567,7 @@ class ThreadEvent extends VerySimpleModel {
     const OVERDUE   = 'overdue';
     const REOPENED  = 'reopened';
     const STATUS    = 'status';
-    const TRANFERRED = 'transferred';
+    const TRANSFERRED = 'transferred';
     const VIEWED    = 'viewed';
 
     const MODE_STAFF = 1;
@@ -1604,14 +1614,18 @@ class ThreadEvent extends VerySimpleModel {
     }
 
     function template($description) {
+        global $thisstaff, $cfg;
+
         $self = $this;
         return preg_replace_callback('/\{(<(?P<type>([^>]+))>)?(?P<key>[^}.]+)(\.(?P<data>[^}]+))?\}/',
-            function ($m) use ($self) {
+            function ($m) use ($self, $thisstaff, $cfg) {
                 switch ($m['key']) {
                 case 'assignees':
                     $assignees = array();
                     if ($S = $self->staff) {
-                        $avatar = $S->getAvatar();
+                        $avatar = '';
+                        if ($cfg->isAvatarsEnabled())
+                            $avatar = $S->getAvatar();
                         $assignees[] =
                             $avatar.$S->getName();
                     }
@@ -1621,18 +1635,32 @@ class ThreadEvent extends VerySimpleModel {
                     return implode('/', $assignees);
                 case 'somebody':
                     $name = $self->getUserName();
-                    if ($avatar = $self->getAvatar())
+                    if ($cfg->isAvatarsEnabled()
+                            && ($avatar = $self->getAvatar()))
                         $name = $avatar.$name;
                     return $name;
                 case 'timestamp':
-                    return sprintf('<time class="relative" datetime="%s" title="%s">%s</time>',
+                    $timeFormat = null;
+                    if ($thisstaff
+                            && !strcasecmp($thisstaff->datetime_format,
+                                'relative')) {
+                        $timeFormat = function ($timestamp) {
+                            return Format::relativeTime(Misc::db2gmtime($timestamp));
+                        };
+                    }
+
+                    return sprintf('<time %s datetime="%s"
+                            data-toggle="tooltip" title="%s">%s</time>',
+                        $timeFormat ? 'class="relative"' : '',
                         date(DateTime::W3C, Misc::db2gmtime($self->timestamp)),
                         Format::daydatetime($self->timestamp),
-                        Format::relativeTime(Misc::db2gmtime($self->timestamp))
+                        $timeFormat ? $timeFormat($self->timestamp) :
+                        Format::datetime($self->timestamp)
                     );
                 case 'agent':
                     $name = $self->agent->getName();
-                    if ($avatar = $self->getAvatar())
+                    if ($cfg->isAvatarsEnabled()
+                            && ($avatar = $self->getAvatar()))
                         $name = $avatar.$name;
                     return $name;
                 case 'dept':
@@ -1672,7 +1700,7 @@ class ThreadEvent extends VerySimpleModel {
     }
 
     static function create($ht=false, $user=false) {
-        $inst = parent::create($ht);
+        $inst = new static($ht);
         $inst->timestamp = SqlFunction::NOW();
 
         global $thisstaff, $thisclient;
@@ -1690,7 +1718,7 @@ class ThreadEvent extends VerySimpleModel {
     }
 
     static function forTicket($ticket, $state, $user=false) {
-        $inst = static::create(array(
+        $inst = self::create(array(
             'staff_id' => $ticket->getStaffId(),
             'team_id' => $ticket->getTeamId(),
             'dept_id' => $ticket->getDeptId(),
@@ -2096,7 +2124,14 @@ class ThreadEntryBody /* extends SplString */ {
     }
 
     function getClean() {
-        return trim($this->body);
+        switch ($this->type) {
+        case 'html':
+            return trim($this->body, " <>br/\t\n\r") ? $this->body: '';
+        case 'text':
+            return trim($this->body) ? $this->body: '';
+        default:
+            return trim($this->body);
+        }
     }
 
     function __toString() {
@@ -2138,6 +2173,13 @@ class ThreadEntryBody /* extends SplString */ {
             return new ThreadEntryBody($text);
         }
     }
+
+    static function clean($text, $format=null) {
+        global $cfg;
+        $format = $format ?: ($cfg->isHtmlThreadEnabled() ? 'html' : 'text');
+        $body = static::fromFormattedText($text, $format);
+        return $body->getClean();
+    }
 }
 
 class TextThreadEntryBody extends ThreadEntryBody {
@@ -2146,7 +2188,7 @@ class TextThreadEntryBody extends ThreadEntryBody {
     }
 
     function getClean() {
-        return Format::stripEmptyLines($this->body);
+        return  Format::stripEmptyLines(parent::getClean());
     }
 
     function prepend($what) {
@@ -2193,7 +2235,7 @@ class HtmlThreadEntryBody extends ThreadEntryBody {
     }
 
     function getClean() {
-        return trim($this->body, " <>br/\t\n\r") ? Format::sanitize($this->body) : '';
+        return Format::sanitize(parent::getClean());
     }
 
     function getSearchable() {
@@ -2235,10 +2277,6 @@ class MessageThreadEntry extends ThreadEntry {
 
     function getSubject() {
         return $this->getTitle();
-    }
-
-    static function create($vars, &$errors=array()) {
-        return static::add($vars, $errors);
     }
 
     static function add($vars, &$errors=array()) {
@@ -2287,10 +2325,6 @@ class ResponseThreadEntry extends ThreadEntry {
         return $this->getStaff();
     }
 
-    static function create($vars, &$errors=array()) {
-        return static::add($vars, $errors);
-    }
-
     static function add($vars, &$errors=array()) {
 
         if (!$vars || !is_array($vars) || !$vars['threadId'])
@@ -2332,10 +2366,6 @@ class NoteThreadEntry extends ThreadEntry {
         return new ThreadActivity(
                 _S('New Internal Note'),
                 _S('New internal note posted'));
-    }
-
-    static function create($vars, &$errors) {
-        return self::add($vars, $errors);
     }
 
     static function add($vars, &$errors=array()) {
@@ -2405,44 +2435,68 @@ implements TemplateVariable {
         return $this->counts[NoteThreadEntry::ENTRY_TYPE];
     }
 
-    function getMessages() {
-        return $this->entries->filter(array(
-            'type' => MessageThreadEntry::ENTRY_TYPE
-        ));
-    }
 
     function getLastMessage($criteria=false) {
-        $entries = $this->entries->filter(array(
+        $entries = clone $this->getEntries();
+        $entries->filter(array(
             'type' => MessageThreadEntry::ENTRY_TYPE
         ));
+
         if ($criteria)
             $entries->filter($criteria);
 
-        return $entries->order_by('-id')->first();
+        $entries->order_by('-id');
+
+        return $entries->first();
     }
 
-    function getEntry($var) {
-        // XXX: PUNT
-        if (is_numeric($var))
-            $id = $var;
-        else {
-            $criteria = array_merge($var, array('limit' => 1));
-            $entries = $this->getEntries($criteria);
-            if ($entries && $entries[0])
-                $id = $entries[0]['id'];
-        }
+    function getLastEmailMessage($criteria=array()) {
 
-        return $id ? parent::getEntry($id) : null;
+        $criteria += array(
+                'source' => 'Email',
+                'email_info__headers__isnull' => false);
+
+        return $this->getLastMessage($criteria);
+    }
+
+    function getLastEmailMessageByUser($user) {
+
+        $uid = is_numeric($user) ? $user : 0;
+        if (!$uid && ($user instanceof EmailContact))
+            $uid = $user->getUserId();
+
+        return $uid
+                ? $this->getLastEmailMessage(array('user_id' => $uid))
+                : null;
+    }
+
+    function getEntry($criteria) {
+        // XXX: PUNT
+        if (is_numeric($criteria))
+            return parent::getEntry($criteria);
+
+        $entries = clone $this->getEntries();
+        $entries->filter($criteria);
+        return $entries->first();
+    }
+
+    function getMessages() {
+        $entries = clone $this->getEntries();
+        return $entries->filter(array(
+            'type' => MessageThreadEntry::ENTRY_TYPE
+        ));
     }
 
     function getResponses() {
-        return $this->entries->filter(array(
+        $entries = clone $this->getEntries();
+        return $entries->filter(array(
             'type' => ResponseThreadEntry::ENTRY_TYPE
         ));
     }
 
     function getNotes() {
-        return $this->entries->filter(array(
+        $entries = clone $this->getEntries();
+        return $entries->filter(array(
             'type' => NoteThreadEntry::ENTRY_TYPE
         ));
     }
@@ -2451,7 +2505,7 @@ implements TemplateVariable {
 
         //Add ticket Id.
         $vars['threadId'] = $this->getId();
-        return NoteThreadEntry::create($vars, $errors);
+        return NoteThreadEntry::add($vars, $errors);
     }
 
     function addMessage($vars, &$errors) {
@@ -2459,7 +2513,7 @@ implements TemplateVariable {
         $vars['threadId'] = $this->getId();
         $vars['staffId'] = 0;
 
-        if (!($message = MessageThreadEntry::create($vars, $errors)))
+        if (!($message = MessageThreadEntry::add($vars, $errors)))
             return $message;
 
         $this->lastmessage = SqlFunction::NOW();
@@ -2472,7 +2526,7 @@ implements TemplateVariable {
         $vars['threadId'] = $this->getId();
         $vars['userId'] = 0;
 
-        if (!($resp = ResponseThreadEntry::create($vars, $errors)))
+        if (!($resp = ResponseThreadEntry::add($vars, $errors)))
             return $resp;
 
         $this->lastresponse = SqlFunction::NOW();
@@ -2526,8 +2580,9 @@ implements TemplateVariable {
 
 // Ticket thread class
 class TicketThread extends ObjectThread {
+    static function create($ticket=false) {
+        assert($ticket !== false);
 
-    static function create($ticket) {
         $id = is_object($ticket) ? $ticket->getId() : $ticket;
         $thread = parent::create(array(
                     'object_id' => $id,
@@ -2571,10 +2626,6 @@ abstract class ThreadEntryAction {
     }
 
     abstract function trigger();
-
-    function getTicket() {
-        return $this->entry->getObject();
-    }
 
     function isEnabled() {
         return $this->isVisible();

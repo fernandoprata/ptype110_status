@@ -51,12 +51,13 @@ class osTicket {
     var $company;
     var $plugins;
 
-    function osTicket() {
+    function __construct() {
 
         require_once(INCLUDE_DIR.'class.config.php'); //Config helper
         require_once(INCLUDE_DIR.'class.company.php');
 
-        $this->session = osTicketSession::start(SESSION_TTL); // start DB based session
+        if (!defined('DISABLE_SESSION') || !DISABLE_SESSION)
+            $this->session = osTicketSession::start(SESSION_TTL); // start DB based session
 
         $this->config = new OsticketConfig();
 
@@ -498,7 +499,7 @@ class osTicket {
     }
 
     /* returns true if script is being executed via commandline */
-    function is_cli() {
+    static function is_cli() {
         return (!strcasecmp(substr(php_sapi_name(), 0, 3), 'cli')
                 || (!isset($_SERVER['REQUEST_METHOD']) &&
                     !isset($_SERVER['HTTP_HOST']))

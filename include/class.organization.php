@@ -35,6 +35,9 @@ class OrganizationModel extends VerySimpleModel {
     const COLLAB_PRIMARY_CONTACT =  0x0002;
     const ASSIGN_AGENT_MANAGER =    0x0004;
 
+    const SHARE_PRIMARY_CONTACT =   0x0008;
+    const SHARE_EVERYBODY =         0x0010;
+
     const PERM_CREATE =     'org.create';
     const PERM_EDIT =       'org.edit';
     const PERM_DELETE =     'org.delete';
@@ -65,6 +68,10 @@ class OrganizationModel extends VerySimpleModel {
 
     function getName() {
         return $this->name;
+    }
+
+    function getNumUsers() {
+        return $this->users->count();
     }
 
     function getAccountManager() {
@@ -98,6 +105,14 @@ class OrganizationModel extends VerySimpleModel {
 
     function autoAssignAccountManager() {
         return $this->check(self::ASSIGN_AGENT_MANAGER);
+    }
+
+    function shareWithPrimaryContacts() {
+        return $this->check(self::SHARE_PRIMARY_CONTACT);
+    }
+
+    function shareWithEverybody() {
+        return $this->check(self::SHARE_EVERYBODY);
     }
 
     function getUpdateDate() {
@@ -134,18 +149,15 @@ RolePermission::register(/* @trans */ 'Organizations',
 
 class OrganizationCdata extends VerySimpleModel {
     static $meta = array(
-        'table' => 'org__cdata',
-        'view' => true,
+        'table' => ORGANIZATION_CDATA_TABLE,
         'pk' => array('org_id'),
+        'joins' => array(
+            'org' => array(
+                'constraint' => array('ord_id' => 'OrganizationModel.id'),
+            ),
+        ),
     );
-
-    function getQuery($compiler) {
-        $form = OrganizationForm::getDefaultForm();
-        $exclude = array('name');
-        return '('.$form->getCrossTabQuery($form->type, 'org_id', $exclude).')';
-    }
 }
-
 
 class Organization extends OrganizationModel
 implements TemplateVariable {
@@ -206,6 +218,8 @@ implements TemplateVariable {
                 'collab-all-flag' => Organization::COLLAB_ALL_MEMBERS,
                 'collab-pc-flag' => Organization::COLLAB_PRIMARY_CONTACT,
                 'assign-am-flag' => Organization::ASSIGN_AGENT_MANAGER,
+                'sharing-primary' => Organization::SHARE_PRIMARY_CONTACT,
+                'sharing-all' => Organization::SHARE_EVERYBODY,
         ) as $ck=>$flag) {
             if ($this->check($flag))
                 $base[$ck] = true;
@@ -244,7 +258,7 @@ implements TemplateVariable {
         }
     }
 
-    function addForm($form, $sort=1, $data) {
+    function addForm($form, $sort=1, $data=null) {
         $entry = $form->instanciate($sort, $data);
         $entry->set('object_type', 'O');
         $entry->set('object_id', $this->getId());
@@ -393,6 +407,16 @@ implements TemplateVariable {
                 $this->clearStatus($flag);
         }
 
+        foreach (array(
+                'sharing-primary' => Organization::SHARE_PRIMARY_CONTACT,
+                'sharing-all' => Organization::SHARE_EVERYBODY,
+        ) as $ck=>$flag) {
+            if ($vars['sharing'] == $ck)
+                $this->setStatus($flag);
+            else
+                $this->clearStatus($flag);
+        }
+
         // Set staff and primary contacts
         $this->set('domain', $vars['domain']);
         $this->set('manager', $vars['manager'] ?: '');
@@ -424,10 +448,10 @@ implements TemplateVariable {
 
     static function fromVars($vars) {
 
-        if (!($org = Organization::lookup(array('name' => $vars['name'])))) {
-            $org = Organization::create(array(
+        $vars['name'] = Format::striptags($vars['name']);
+        if (!($org = static::lookup(array('name' => $vars['name'])))) {
+            $org = static::create(array(
                 'name' => $vars['name'],
-                'created' => new SqlFunction('NOW'),
                 'updated' => new SqlFunction('NOW'),
             ));
             $org->save(true);
@@ -451,7 +475,7 @@ implements TemplateVariable {
         // Make sure the name is not in-use
         if (($field=$form->getField('name'))
                 && $field->getClean()
-                && Organization::lookup(array('name' => $field->getClean()))) {
+                && static::lookup(array('name' => $field->getClean()))) {
             $field->addError(__('Organization with the same name already exists'));
             $valid = false;
         }
@@ -459,11 +483,18 @@ implements TemplateVariable {
         return $valid ? self::fromVars($form->getClean()) : null;
     }
 
+    static function create($vars=false) {
+        $org = new static($vars);
+
+        $org->created = new SqlFunction('NOW');
+        $org->setStatus(self::SHARE_PRIMARY_CONTACT);
+        return $org;
+    }
+
     // Custom create called by installer/upgrader to load initial data
     static function __create($ht, &$error=false) {
 
-        $ht['created'] = new SqlFunction('NOW');
-        $org = Organization::create($ht);
+        $org = static::create($ht);
         // Add dynamic data (if any)
         if ($ht['fields']) {
             $org->save(true);
@@ -477,6 +508,12 @@ implements TemplateVariable {
 class OrganizationForm extends DynamicForm {
     static $instance;
     static $form;
+
+    static $cdata = array(
+            'table' => ORGANIZATION_CDATA_TABLE,
+            'object_id' => 'org_id',
+            'object_type' => ObjectModel::OBJECT_TYPE_ORG,
+        );
 
     static function objects() {
         $os = parent::objects();

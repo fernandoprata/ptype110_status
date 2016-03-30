@@ -80,6 +80,31 @@ class Misc {
         return $dbtime - $dbtz->getOffset($D);
     }
 
+    // Take user's time and return GMT time.
+    function user2gmtime($timestamp=null, $user=null) {
+        global $cfg;
+
+        $tz = new DateTimeZone($cfg->getTimezone($user));
+
+        if (!$timestamp)
+            $timestamp = 'now';
+
+        if (is_int($timestamp)) {
+            $time = $timestamp;
+        } else {
+            if (!($date = new DateTime($timestamp, $tz))) {
+                // Timestamp might be invalid
+                return $timestamp;
+            }
+            $time = $date->format('U');
+        }
+
+        if (!($D = DateTime::createFromFormat('U', $time)))
+            return $time;
+
+        return $time - $tz->getOffset($D);
+    }
+
     //Take user time or gmtime and return db (mysql) time.
     function dbtime($var=null){
         static $dbtz;
@@ -88,13 +113,11 @@ class Misc {
         if (is_null($var) || !$var) {
             // Default timezone is set to UTC
             $time = time();
+        } else {
+            // User time to UTC
+            $time = self::user2gmtime($var);
         }
-        else { //user time to UTC
-            $tz = new DateTimeZone($cfg->getTimezone());
-            $time = is_int($var) ? $var : strtotime($var);
-            $D = DateTime::createFromFormat('U', $time);
-            $time -= $tz->getOffset($D);
-        }
+
         if (!isset($dbtz)) {
             $dbtz = new DateTimeZone($cfg->getDbTimezone());
         }
@@ -104,8 +127,15 @@ class Misc {
     }
 
     /*Helper get GM time based on timezone offset*/
-    function gmtime() {
-        return time()-date('Z');
+    function gmtime($time=false, $user=false) {
+        global $cfg;
+
+        $tz = new DateTimeZone($user ? $cfg->getDbTimezone($user) : 'UTC');
+        if (!($time = new DateTime($time ?: 'now'))) {
+            // Old standard
+            return time() - date('Z');
+        }
+        return $time->getTimestamp() - $tz->getOffset($time);
     }
 
     /* Needed because of PHP 4 support */
@@ -167,7 +197,7 @@ class Misc {
                 $sel=($hr==$i && $min==$minute)?'selected="selected"':'';
                 $_minute=str_pad($minute, 2, '0',STR_PAD_LEFT);
                 $_hour=str_pad($i, 2, '0',STR_PAD_LEFT);
-                $disp = Format::time($i*3600 + $minute*60 + 1, false, false, 'UTC');
+                $disp = Format::time($i*3600 + $minute*60 + 1);
                 echo sprintf('<option value="%s:%s" %s>%s</option>',$_hour,$_minute,$sel,$disp);
             }
         }
