@@ -1,0 +1,28 @@
+---
+password_reset:
+  title: Politica de expiração de palavra-passe
+  content: Define a regularidade (em meses) com que os colaboradores têm de alterar a palavra-passe. Se desactivado, as palavra-passe não expiram.
+password_expiration_policy:
+  title: Politica de expiração de palavra-passe
+  content: 'Esta opção permite escolher a frequência com que os Colaboradores terão de alterar a sua palavra-passe. Se desactivado (ou seja, <b> Sem Expirar</b>), as palavras-passe não expiram.'
+allow_password_resets:
+  title: Permitir recuperação de palavra-passe
+  content: 'Ative esta funcionalidade para mostrar o link <b> Esqueci-me da minha senha</b> do <b> Login do Painel de Colaboardores</b> após uma tentativa falhada de login.'
+reset_token_expiration:
+  title: Tempo de reposição de palavra-passe
+  content: 'Esta opção permite escolher a duração (em minutos) para o qual os <b> Tokens de Redefinir Senha</b> serão válidos. Quando um colaborador solicita uma <b> Redefinição de palavra-passe</b>, é-lhe enviado um token que permite o repor a mesma.'
+staff_session_timeout:
+  title: Tempo limite da sessão do colaborador
+  content: 'Escolha o tempo máximo de inactividade (em minutos) para que seja necessário a um Colaborador fazer login novamente. <br><br>Se quiser desactivar o <b> Tempo limite da sessão de colaboradores</b>, digite 0.'
+client_session_timeout:
+  title: Tempo Limite de sessão de utilizador
+  content: 'Escolha o tempo máximo de inactividade (em minutos) para que seja necessário a um Utilizador fazer login novamente. <br><br>Se quiser desactivar o <b> Tempo limite da sessão de utilizadores</b>, digite 0.'
+bind_staff_session_to_ip:
+  title: Atribuir a sessão do colaborador a IP
+  content: 'Esta opção permite que seja guardado o endereço IP que o colaboardor está a utilizar. <br><br>Esta configuração não é recomendado para utilizadores com endereços IP atribuídos dinamicamente.'
+registration_method:
+  title: Opções de registo
+  content: '<b> Método de Registo</b> e <b> Registro Necessário</b> são usados em conjunto para configurar como os utilizadores se deveem registar e aceder ao portal web do Helpdesk. A tabela indicada em baixo resume como as duas configurações são interpretadas pelo sistema. <table border="1" cellpadding="2px" cellspacing="0" style="margin-top:7px" > <tbody style="vertical-align:top;"> <tr><th>Registro Necessário</th> <th>Método de Registo</th> <th>Resultado</th></tr> <tr><td>Público</td> <td>Não</td> <td>Registo incentivado, mas não necessário para novos incidentes.</td></tr> <tr><td>Sim</td> <td>Público</td> <td>Registo e login são necessários para novos incidentes</td></tr> <tr><td>Não</td> <td>Privado</td> <td>Qualquer um pode criar um incidente, mas apenas Colaboradores podem registar contas</td></tr> <tr><td>Sim</td> <td>Privado</td><td>O acesso do utilizador é apenas por convite</td></tr> <tr><td>Desactivado</td> <td>Não</td> <td>Ninguém se pode registar para uma conta, mas qualquer um pode criar incidente. </td></tr> <tr><td>Sim</td> <td>Desactivado</td> <td>Desactivar novos incidentes através do portal web</td></tr></tbody></table>'
+client_verify_email:
+  title: Requerer verificação de email
+  content: 'Desative esta opção para que os seus utilizadores tenham acesso imediato aos incidentes através da página de login "Verificar Estado do Incidente" no portal do cliente. Se activado, (que é a opção por defeito), os utilizadores deverão receber um email e seguir um link no email para poderem ver o incidente.<br><br>Desactivar a verificação de email pode permitir que terceiros (por exemplo, os colaboradores de incidentes) consigam representar o proprietário do incidente.'

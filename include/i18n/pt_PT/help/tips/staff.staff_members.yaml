@@ -1,0 +1,7 @@
+---
+staff_members:
+  title: Colaboradores
+  content: 'A tabela a seguir exibe os resultados do filtro situado por cima dela. Se não forem inseridos valores no filtro, então serão mostrados todos os colaboradores, divididos por várias páginas, que podem ser visitadas através do controle de páginas situados no fim da lista.'
+status:
+  title: Estado
+  content: 'Esta opção irá mostrar se o <b>colaborador</b> está bloqueado, activo ou activo (férias).'

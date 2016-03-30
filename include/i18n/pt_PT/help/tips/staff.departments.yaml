@@ -1,0 +1,20 @@
+---
+department:
+  title: Departamento
+  content: ""
+name:
+  title: Nome
+  content: ""
+type:
+  title: Tipo
+  content: Se o tipo do departamento é privado, então a assinatura do departamento não estará disponível na resposta nem será mostrada a atribuição do departamento no Portal do cliente.
+users:
+  title: Utilizadores
+  content: ""
+email_address:
+  title: Endereço de email
+  content: ""
+dept_manager:
+  title: Chefia do departamento
+  content: 'Esta opção permite escolher um colaborador para chefia do departamento e, deste modo, receber alertas e avisos de incidentes enviados para o mesmo.
+  A chefia de um departamento não tem que pertencer obrigatoriamente a esse departamento.''

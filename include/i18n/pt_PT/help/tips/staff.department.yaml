@@ -1,0 +1,56 @@
+---
+type:
+  title: Tipo
+  content: 'Esta opção permite escolher o tipo de departamento. Se for <b>privado</b> ele ficará escondido no Portal do Cliente e a assinatura não ficará visível nas respostas de email. <br/> <br/> Pelo meno um departamento deve ser <b>público</b>'
+email:
+  title: Email
+  content: Endereço de email utilizado para as respostas dos colaboradores aos clientes.
+template:
+  title: Conjunto de modelos
+  content: 'Esta opção permite definir o <b> Conjunto de Modelo</b> utilizado para respostas automáticas, alertas e avisos para os incidentes encaminhados para este departamento.'
+  links:
+    - 
+      title: Gerir modelos
+      href: /scp/templates.php
+sla:
+  title: Plano de SLA
+  content: Esta opção permite gerir o plano de SLA para os incidentes atribuídos a este departamento.
+  links:
+    - 
+      title: Gerir planos de SLA
+      href: /scp/slaplans.php
+manager:
+  title: Chefia do Departamento
+  content: 'Esta opção permite seleccionar uma <b>Chefia</b> para este departamento. <br/> <br/> As chefias podem ser configuradas para receber alertas especiais e também têm a permissão para eliminar incidentes.'
+  links:
+    - 
+      title: 'Gerir alertas &amp; avisos'
+      href: /scp/settings.php?t=alerts
+group_membership:
+  title: Destinatários de alertas e avisos
+  content: 'Esta opção permite seleccionar os destinatários dos <b>alertas &amp;avisos</b> configurados.'
+  links:
+    - 
+      title: 'Configurar alertas &amp; avisos'
+      href: /scp/settings.php?t=alerts
+sandboxing:
+  title: Restrições à atribuição de incidentes
+  content: 'Esta opção permite restringir a atribuição de incidentes somente aos membros deste departamento.'
+auto_response_settings:
+  title: 'Configuração das respostas automáticas'
+  content: Esta opção permite substituir a definição global de resposta automática para este departamento.
+new_ticket:
+  title: 'Resposta automática para novo incidente'
+  content: Esta opção permite desactivar a resposta automática enviada ao utilizador, quando um novo incidente é enviado para este departamento.
+new_message:
+  title: Resposta automática a nova mensagem
+  content: Esta opção permite desactivar a reposta automática enviada ao utilizador para confirmar que uma mensagem foi anexada a um incidente deste departamento.
+auto_response_email:
+  title: Mensagem de resposta automática
+  content: Esta opção permite seleccionar o endereço de email a partir do qual as respostas automáticas deste departamento são enviadas.
+department_access:
+  title: Acesso do grupo
+  content: Permitir aos colaboradores de outros departamentos aceder aos incidentes deste departamento.
+department_signature:
+  title: Assinatura do departamento
+  content: 'A assinatura é disponibilizada como escolha, para Departamentos com tipo<b> Público </b>, nas respostas ao colaborador.'

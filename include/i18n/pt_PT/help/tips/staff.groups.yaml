@@ -1,0 +1,10 @@
+---
+groups:
+  title: Grupos
+  content: Os grupos são utilizados para definir as permissões do colaborador no helpdesk. Os grupos também permitem dar ao colaboardor acesso a outros departamentos para além do seu próprio.
+status:
+  title: Estado
+  content: 'Esta opção permite <b>desactivar</b> os colaboradores deste grupo, impedindo que os mesmos entrem no sistema ou que recebam alertas e avisos.'
+department_access:
+  title: Acesso ao departamento
+  content: Esta opção permite marcar os departamentos a que este grupo de colaboradores tem acesso.

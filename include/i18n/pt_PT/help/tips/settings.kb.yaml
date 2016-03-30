@@ -1,0 +1,18 @@
+---
+knowledge_base_settings:
+  title: Definições da biblioteca
+  content: ""
+knowledge_base_status:
+  title: Estado da biblioteca
+  content: 'Esta opção permite que os utilizadores tenham acesso aos artigos públicos da biblioteca.<br><br> As categorias e as FAQs da biblioteca podem ser tornados internos (visíveis somente por Colaboradores).'
+  links:
+    - 
+      title: Gerir a biblioteca
+      href: /scp/kb.php
+canned_responses:
+  title: Respostas pré definidas
+  content: 'Esta opção permite que os colaboradores usem <b>Respostas Pré-definidas</span> ao responderem aos incidentes.'
+  links:
+    - 
+      title: Gerir respostas pré definidas
+      href: /scp/canned.php

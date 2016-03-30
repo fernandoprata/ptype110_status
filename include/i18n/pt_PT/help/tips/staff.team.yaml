@@ -1,0 +1,28 @@
+---
+teams:
+  title: Equipas
+  content: As equipas são constituídas por um ou mais colaboradores que podem ser utilizadas na atribuição de incidentes. Os limites dessa atribuição podem ultrapassar o limite do departamento de cada elemento da equipa.
+status:
+  title: Estado
+  content: 'Esta opção permite activar ou desactivar uma equipa para efeitos de atribuição de incidentes. Se a equipa estiver desactivada, também não receberá alertas ou avisos sobre incidentes anteriores.'
+lead:
+  title: Chefia da equipa
+  content: 'Uma <b>equipa</b> pode ter uma chefia que receberá os <b>alertas e avisos</b> em separado dos membros.'
+  links:
+    - 
+      title: 'Configurar alertas &amp; avisos'
+      href: /scp/settings.php?t=alerts
+assignment_alert:
+  title: Alerta de atribuição
+  content: 'Esta opção pode desactivar o <b>alerta de atribuição de incidentes</b> para incidentes atribuídos a esta equipa.'
+  links:
+    - 
+      title: 'Configurar alertas &amp; avisos'
+      href: /scp/settings.php?t=alerts
+members:
+  title: Membros da equipa
+  content: Cada membro da equipa é configurado através do perfil do colaborador.
+  links:
+    - 
+      title: Gerir equipa
+      href: /scp/staff.php

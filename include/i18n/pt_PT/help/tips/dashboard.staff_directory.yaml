@@ -1,0 +1,8 @@
+---
+staff_members:
+  title: Listagem de colaboradores
+  content: 'A tabela a seguir exibe os resultados do filtro situado por cima dela. Se não forem inseridos valores no filtro, então serão mostrados todos os colaboradores, divididos por várias páginas, que podem ser visitadas através do controle de páginas situados no fim da listagem.'
+apply_filtering_criteria:
+  title: Aplicar critérios de filtragem
+  content: 'Escolha o <b>Departamento</b> que pretende filtrar. Na caixa de texto pode também procurar um colaborador específico.'
+  
